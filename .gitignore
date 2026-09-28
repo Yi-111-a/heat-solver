@@ -1,0 +1,5 @@
+build/
+build-linux/
+build-wsl/
+__pycache__/
+*.pyc
