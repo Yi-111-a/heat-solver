@@ -1,0 +1,245 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<title>Where the Time Goes: A 2D Heat-Equation Solver on CPU and GPU</title>
+<style>
+  @page { size: A4; margin: 17mm 18mm 17mm 18mm; }
+  body { font-family: "Times New Roman", Times, serif; font-size: 11pt; line-height: 1.4; color: #111; max-width: 170mm; margin: 0 auto; }
+  h1 { font-size: 17pt; text-align: center; margin: 0 0 4pt; line-height: 1.25; }
+  .meta { text-align: center; font-size: 10.5pt; margin-bottom: 12pt; }
+  h2 { font-size: 13pt; margin: 16pt 0 5pt; }
+  h3 { font-size: 11.5pt; margin: 12pt 0 4pt; }
+  p { margin: 0 0 7pt; text-align: justify; }
+  .abstract { border-top: 1px solid #999; border-bottom: 1px solid #999; padding: 7pt 0; margin-bottom: 8pt; font-size: 10.5pt; }
+  .eq { text-align: center; margin: 6pt 0 8pt; font-style: italic; }
+  .eq .n { float: right; font-style: normal; }
+  .keep { break-inside: avoid; page-break-inside: avoid; }
+  h2, h3 { break-after: avoid; page-break-after: avoid; }
+  figure { margin: 8pt 0 10pt; text-align: center; break-inside: avoid; }
+  figure img { max-width: 100%; }
+  .pair { display: flex; gap: 6pt; }
+  .pair img { width: 50%; }
+  figcaption { font-size: 9.5pt; text-align: left; margin-top: 3pt; }
+  table { border-collapse: collapse; margin: 6pt auto 10pt; font-size: 9.5pt; break-inside: avoid; }
+  th, td { border-top: 1px solid #bbb; border-bottom: 1px solid #bbb; padding: 3pt 6pt; text-align: left; vertical-align: top; }
+  th { border-top: 1.5px solid #333; border-bottom: 1px solid #333; }
+  td.r, th.r { text-align: right; }
+  caption { caption-side: top; font-size: 9.5pt; text-align: left; margin-bottom: 3pt; }
+  code { font-family: Consolas, "Courier New", monospace; font-size: 9.5pt; }
+  ol.refs { font-size: 9.5pt; padding-left: 16pt; }
+  sub, sup { font-size: 75%; line-height: 0; }
+</style>
+</head>
+<body>
+
+<h1>Where the Time Goes: A 2D Heat-Equation Solver<br>on CPU and GPU in Single and Double Precision</h1>
+<div class="meta">Zeyu Yin &middot; School of Software Technology, Dalian University of Technology &middot; September 2026<br>
+Code, data and scripts: <code>github.com/Yi-111-a/heat-solver</code></div>
+
+<div class="abstract"><p><b>Abstract.</b> I solve the two-dimensional heat equation with an explicit finite-difference
+scheme and implement it three ways: serially, with OpenMP on a 20-thread laptop CPU, and with CUDA on a
+laptop GPU, each in single and double precision. A small benchmarking tool runs every configuration and
+checks every run against the exact solution. Three questions are asked. <i>Accuracy:</i> the scheme converges
+at second order in double precision, while single precision stalls near 10<sup>&minus;6</sup> once
+rounding error accumulated over thousands of steps overtakes the discretisation error. <i>CPU scaling:</i>
+20 threads are only 2&ndash;3 times faster than one; of three candidate explanations, testing confirms
+memory bandwidth, rejects imbalance between the CPU's fast and slow cores, and partly confirms per-step
+synchronisation cost. <i>GPU:</i> on large grids the GPU is 6.6&ndash;6.9 times faster than the CPU, close to
+the ratio of their memory bandwidths, and double precision is only 2 times slower than single although the
+GPU's double-precision arithmetic is 64 times slower. All three answers point the same way: for this
+computation the cost is in moving data, not in arithmetic.</p></div>
+
+<h2>1&ensp;Introduction</h2>
+<p>Explicit stencil updates are among the simplest kernels in scientific computing, and among the most
+common: the same pattern of &ldquo;each point from its neighbours&rdquo; appears in heat conduction,
+wave propagation and the inner loops of many fluid solvers. They are also a good test of how hardware
+behaves, because each update does very little arithmetic for the data it reads. The aim of this project
+was not to write the fastest possible solver, but to measure carefully where the time goes on an ordinary
+machine, and to test explanations rather than assume them. The questions were:</p>
+<p><b>Q1.</b> How accurate is single precision compared with double, and where does it break down?<br>
+<b>Q2.</b> How does an OpenMP version scale on a modern hybrid CPU, and why?<br>
+<b>Q3.</b> How much faster is a GPU, and does its weak double-precision arithmetic matter?</p>
+
+<h2>2&ensp;Problem and numerical method</h2>
+<p>The model problem is the heat equation on the unit square with zero boundary values,</p>
+<div class="eq">u<sub>t</sub> = &alpha;(u<sub>xx</sub> + u<sub>yy</sub>),&ensp; (x, y) &isin; [0,1]<sup>2</sup>,&ensp; u = 0 on the boundary,<span class="n">(1)</span></div>
+<p>with &alpha; = 1 and initial condition u(x, y, 0) = sin(&pi;x) sin(&pi;y). The exact solution is</p>
+<div class="eq">u(x, y, t) = e<sup>&minus;2&pi;&sup2;&alpha;t</sup> sin(&pi;x) sin(&pi;y),<span class="n">(2)</span></div>
+<p>so every run can be checked against it. On an n &times; n grid of interior points with spacing
+h = 1/(n+1), the forward-time, centred-space (FTCS) scheme is</p>
+<div class="eq">u<sub>i,j</sub><sup>k+1</sup> = u<sub>i,j</sub><sup>k</sup> + r (u<sub>i&minus;1,j</sub><sup>k</sup> + u<sub>i+1,j</sub><sup>k</sup> + u<sub>i,j&minus;1</sub><sup>k</sup> + u<sub>i,j+1</sub><sup>k</sup> &minus; 4u<sub>i,j</sub><sup>k</sup>),&ensp; r = &alpha;&Delta;t / h<sup>2</sup>.<span class="n">(3)</span></div>
+<p>The scheme is stable for r &le; 1/4; all runs use r = 0.2. Its truncation error is
+O(&Delta;t + h<sup>2</sup>), and since &Delta;t is proportional to h<sup>2</sup> the overall error should fall
+as h<sup>2</sup>. Accuracy runs integrate to t = 0.01, slightly shrinking &Delta;t so the final step lands
+exactly on it; the error is reported as the root-mean-square difference from (2) over the grid, always
+computed in double precision. The price of the explicit scheme is visible in the step counts: halving h
+quadruples the number of steps (15 steps at n = 16, 13&thinsp;159 at n = 512).</p>
+
+<h2>3&ensp;Implementation and measurement</h2>
+<p><b>Data layout.</b> The grid is stored row by row in an (n+2) &times; (n+2) array whose outer ring holds the
+boundary values, so the update (3) needs no special cases. Two arrays alternate between &ldquo;old&rdquo; and
+&ldquo;new&rdquo;; swapping them is a pointer swap. The code is templated on the number type, so the same
+source produces the float and double versions.</p>
+<p><b>OpenMP.</b> Each point depends only on the previous time level, so rows can be shared among threads with
+no data races. The baseline starts a parallel loop at every time step with a static schedule (equal blocks of
+rows per thread). Two variants were added to test the explanations in Section 4.2: a <i>dynamic</i> schedule,
+in which threads take 16 rows at a time as they become free, and a <i>persistent</i> version, in which one team
+of threads runs all time steps and each step ends with a barrier instead of a new team.</p>
+<p><b>CUDA.</b> One GPU thread updates one grid point. Blocks are 32 &times; 8 threads with the 32 along a row,
+so neighbouring threads read neighbouring addresses and memory accesses are coalesced. One kernel is
+launched per time step; only the time-stepping loop is timed, not the copies to and from the GPU.</p>
+<p><b>Measurement.</b> Each configuration is run three times and the fastest run is kept, the one least
+disturbed by the operating system. Performance is reported as MLUPS (million grid-point updates per second)
+and as an effective bandwidth that counts one read and one write per update (16 bytes in double, 8 in float).
+This is a lower bound on real traffic, which Section 4.2 returns to. A Python tool (<code>heatbench.py</code>)
+runs every experiment, stores results as CSV and draws all figures in this report, so the whole study can be
+reproduced with a few commands. Hardware is listed in Table 1.</p>
+
+<table>
+<caption>Table 1. Test machine (a laptop). CPU experiments ran on Windows, GPU experiments under WSL on the same machine.</caption>
+<tr><th>Component</th><th>Details</th></tr>
+<tr><td>CPU</td><td>Intel Core i5-13500HX: 6 performance cores (2 threads each) + 8 efficiency cores = 20 threads</td></tr>
+<tr><td>Memory</td><td>2 &times; 8 GB DDR5-4800, dual channel: 76.8 GB/s theoretical peak</td></tr>
+<tr><td>GPU</td><td>NVIDIA GeForce RTX 4060 Laptop, 8 GB GDDR6 (about 256 GB/s), 32 MB L2 cache; FP64 rate 1/64 of FP32</td></tr>
+<tr><td>Software</td><td>GCC 16 (MinGW) with OpenMP, <code>-O3 -march=native</code>, no fast-math; CUDA 13.4 with GCC 12 under WSL</td></tr>
+</table>
+
+<div class="keep">
+<h2>4&ensp;Results</h2>
+
+<h3>4.1&ensp;Accuracy (Q1)</h3>
+<figure>
+<img src="../figures/convergence.png" style="width:55%">
+<figcaption>Figure 1. RMS error at t = 0.01 against grid spacing. Double precision follows the second-order
+line throughout; single precision leaves it once the error falls to about 10<sup>&minus;5</sup>.</figcaption>
+</figure>
+</div>
+<p>Double precision converges at the expected second order across the whole range: each halving of h divides
+the error by four, from 3.2&times;10<sup>&minus;4</sup> at n = 16 to 3.6&times;10<sup>&minus;7</sup> at n = 512
+(Figure 1). This also verifies the implementation. Single precision is indistinguishable from double on coarse
+grids but departs from the line from n = 128 onwards: at n = 256 its error is 4.4&times;10<sup>&minus;6</sup>,
+three times the double-precision error, and refining further no longer gives the expected factor of four.
+The cause is rounding. Each update in float carries a relative error of about 6&times;10<sup>&minus;8</sup>,
+and these errors accumulate over the 3&thinsp;303 steps needed at n = 256 and the 13&thinsp;159 at n = 512,
+while the discretisation error they compete with keeps shrinking. The finer the grid, the more steps, and
+the sooner single precision runs out of digits. The GPU reproduces the CPU errors exactly in both precisions,
+which confirms the CUDA version computes the same thing.</p>
+
+<h3>4.2&ensp;CPU scaling (Q2)</h3>
+<p>On a 2048<sup>2</sup> grid the OpenMP version is at best 2.2 times faster than serial in double precision
+and 2.8 times in float; on a 512<sup>2</sup> grid 20 threads are <i>slower</i> than one (Figure 2, left).
+Throughput also depends strongly on problem size (Figure 2, right): grids of a few megabytes, which fit in the
+CPU's caches, run up to three times faster than grids that must come from main memory.</p>
+<figure class="keep">
+<img src="../figures/scaling.png" style="width:49%"> <img src="../figures/size.png" style="width:49%">
+<figcaption>Figure 2. Left: OpenMP speedup over the serial code. Right: throughput
+against the memory occupied by the two grids, serial and OpenMP.</figcaption></figure>
+<p>Three explanations were plausible, and each was tested separately (Figure 3, Table 2).</p>
+<figure>
+<img src="../figures/diagnose.png">
+<figcaption>Figure 3. The three tests. (1) Effective bandwidth on a 4096<sup>2</sup> grid; the dotted line is
+the DRAM peak. (2) Static against dynamic scheduling on the same grid. (3) A new thread team every step against
+one team for all steps, on a 256<sup>2</sup> grid; the dotted line is the serial code.</figcaption>
+</figure>
+<table>
+<caption>Table 2. Hypotheses for the poor OpenMP scaling and what the tests showed.</caption>
+<tr><th style="width:24%">Hypothesis</th><th style="width:28%">Test</th><th>Result</th></tr>
+<tr><td>Memory bandwidth limits large grids</td><td>Bandwidth against threads, float and double</td>
+<td><b>Confirmed.</b> Bandwidth stops rising at about 40 GB/s by 6 threads and is the same in both precisions,
+so the bytes moved, not the arithmetic, set the speed.</td></tr>
+<tr><td>Fast cores wait for slow cores</td><td>Dynamic schedule, so faster cores take more rows</td>
+<td><b>Rejected.</b> Dynamic and static agree within noise. When every core waits for memory, core speed
+does not matter.</td></tr>
+<tr><td>Per-step overhead dominates small grids</td><td>One thread team for all steps</td>
+<td><b>Partly confirmed.</b> 30&ndash;45&thinsp;% faster up to 6 threads, but the barrier at the end of each step
+grows with the number of threads, and no parallel version beats one thread on a 256<sup>2</sup> grid.</td></tr>
+</table>
+<p>The bandwidth plateau of about 40 GB/s is well below the 76.8 GB/s peak, but the effective-bandwidth
+figure undercounts. Before a CPU can write a cache line it normally reads it from memory first
+(&ldquo;write-allocate&rdquo;), so each update really moves about three values, not two. Real traffic is therefore
+roughly 55&ndash;60 GB/s, or 70&ndash;80&thinsp;% of the theoretical peak, which is typical of what a program can
+sustain [2]. In roofline terms [1], the update (3) performs 7 floating-point operations (five additions or
+subtractions, two multiplications) per 16 bytes in double precision, an arithmetic intensity of about
+0.44 flop/byte, far to the left of the point where a modern CPU core
+becomes limited by arithmetic. The practical conclusion is simple: on this machine about 6 threads are enough
+for large grids, and a single thread is best for small ones.</p>
+
+<div class="keep">
+<h3>4.3&ensp;GPU (Q3)</h3>
+<figure>
+<img src="../figures/gpu.png" style="width:64%">
+<figcaption>Figure 4. Throughput of the GPU (solid) and of the best CPU version (dashed) against the memory
+occupied by the two grids.</figcaption>
+</figure>
+</div>
+<table>
+<caption>Table 3. GPU throughput (MLUPS) and effective bandwidth, with the CPU (OpenMP, 20 threads) for comparison at n = 4096.</caption>
+<tr><th class="r">n</th><th class="r">grids, double</th><th class="r">GPU double</th><th class="r">GPU float</th><th class="r">float / double</th><th>regime</th></tr>
+<tr><td class="r">256</td><td class="r">1.1 MB</td><td class="r">7&thinsp;946</td><td class="r">9&thinsp;951</td><td class="r">1.3</td><td>kernel-launch overhead</td></tr>
+<tr><td class="r">1024</td><td class="r">16.8 MB</td><td class="r">19&thinsp;570</td><td class="r">76&thinsp;337</td><td class="r">3.9</td><td>fits in the 32 MB L2</td></tr>
+<tr><td class="r">4096</td><td class="r">268 MB</td><td class="r">14&thinsp;659</td><td class="r">29&thinsp;657</td><td class="r">2.0</td><td>limited by GPU memory</td></tr>
+<tr><td class="r">8192</td><td class="r">1074 MB</td><td class="r">14&thinsp;259</td><td class="r">29&thinsp;728</td><td class="r">2.1</td><td>limited by GPU memory</td></tr>
+<tr><td class="r">4096</td><td class="r"></td><td class="r">CPU: 2&thinsp;228</td><td class="r">CPU: 4&thinsp;302</td><td class="r">1.9</td><td>GPU/CPU: 6.6&times; (double), 6.9&times; (float)</td></tr>
+</table>
+<p><b>Large grids.</b> Once the grids no longer fit in the GPU's 32 MB L2 cache, throughput settles at about
+14.5 thousand MLUPS in double and 29.7 thousand in float, both corresponding to about 230 GB/s of effective
+bandwidth, roughly 90&thinsp;% of the card's memory bandwidth. The GPU is then 6.6&ndash;6.9 times faster than the
+CPU, very close to the ratio of the bandwidths measured on the two devices (about 235 against 36 GB/s):
+the GPU wins by moving data faster, not by computing faster.</p>
+<p><b>Double against single precision.</b> This result surprised me. A consumer GPU executes double-precision
+arithmetic at 1/64 of its single-precision rate, so I expected double precision to be many times slower.
+It is only 2.0 times slower, exactly the ratio of bytes per value. The roofline argument explains why: at
+0.44 flop/byte and about 256 GB/s, the kernel can use at most about 110 GFLOP/s of double-precision
+arithmetic, while even at 1/64 of the single-precision rate the card provides on the order of 200 GFLOP/s
+(the exact figure depends on the laptop's power limit). The measured 14.7 thousand MLUPS in double is about
+103 GFLOP/s, just under the memory limit and well under the arithmetic one. The slow double-precision units
+are never the bottleneck, and would only become one for a kernel doing several times more arithmetic per byte.</p>
+<p><b>Mid-sized grids.</b> Grids that fit in L2 run faster than memory bandwidth allows: up to 76 thousand MLUPS
+in float at n = 1024, an effective 611 GB/s, because the data never leaves the cache between steps. Double
+precision gains much less at the same n (313 GB/s), although its 16.8 MB of grids should also fit in L2; I do not
+have an explanation for this from these measurements, and settling it would need the GPU's hardware counters.</p>
+<p><b>Small grids.</b> Below about 1 MB the GPU is limited by the fixed cost of launching one kernel per time
+step, the GPU counterpart of the per-step synchronisation seen on the CPU.</p>
+
+<h2>5&ensp;Discussion</h2>
+<p>The same lesson appears in all three questions. Single precision is attractive on both devices because it
+halves the bytes moved, and the speedup it gives is almost exactly two whenever memory is the limit; its cost
+is the accuracy floor of Section 4.1, which matters more the finer the grid and the longer the run. Adding CPU
+cores helps only until memory is saturated, which happens at about 6 threads. The GPU's advantage is its memory
+system, and its famously weak double-precision arithmetic is irrelevant for a kernel this light.</p>
+<p>Two findings came from testing rather than assuming. I expected the hybrid CPU's slower cores to hold back the
+faster ones, and a dynamic schedule to help; it did not, because every core was waiting for memory anyway. I also
+expected reusing one thread team to fix the small-grid slowdown; it helped only up to 6 threads, which showed that
+the remaining cost is the synchronisation each time step needs, not the creation of threads.</p>
+<p><b>Limitations.</b> Timings on a laptop vary by roughly 10&ndash;20&thinsp;% between runs with temperature and
+power state; the patterns reported here were stable across repeated runs, but individual numbers are not.
+CPU and GPU experiments ran under different operating systems on the same machine. The effective-bandwidth
+figures rest on a simple model of memory traffic rather than on hardware counters, and the kernel is deliberately
+simple: an implicit scheme or a more expensive stencil could move the balance towards arithmetic.</p>
+<p><b>Extensions.</b> The natural next steps attack the memory limit directly: temporal blocking, which applies
+several time steps to a block of the grid while it is still in cache; using shared memory on the GPU; and
+advancing several time steps per kernel launch to remove launch overhead on small grids. Beyond a single node,
+distributing the grid with MPI would add the cost of exchanging boundary rows, a new term in the same balance
+between moving data and computing on it.</p>
+
+<h2>6&ensp;Conclusion</h2>
+<p>A simple explicit solver, measured carefully, answered three questions with one idea. Double precision
+converges at second order and single precision stalls near 10<sup>&minus;6</sup> because of accumulated rounding;
+the CPU stops scaling at about 6 threads because memory bandwidth is exhausted, not because of its hybrid cores;
+and the GPU is about 7 times faster because its memory is, while its 64-times-slower double-precision arithmetic
+costs only a factor of two. For low-intensity kernels like this one, performance is a question of bytes, not flops.</p>
+
+<h2>References</h2>
+<ol class="refs">
+<li>S. Williams, A. Waterman and D. Patterson. Roofline: an insightful visual performance model for multicore
+architectures. <i>Communications of the ACM</i>, 52(4):65&ndash;76, 2009.</li>
+<li>J. D. McCalpin. Memory bandwidth and machine balance in current high performance computers.
+<i>IEEE Computer Society Technical Committee on Computer Architecture Newsletter</i>, 1995.</li>
+<li>R. J. LeVeque. <i>Finite Difference Methods for Ordinary and Partial Differential Equations.</i> SIAM, 2007.</li>
+<li>OpenMP Architecture Review Board. <i>OpenMP Application Programming Interface, Version 5.2</i>, 2021.</li>
+<li>NVIDIA. <i>CUDA C++ Programming Guide.</i> 2026.</li>
+</ol>
+
+</body>
+</html>

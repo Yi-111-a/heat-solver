@@ -1,5 +1,7 @@
 # heat-solver
 
+**Technical report:** [`report/heat-solver-report.pdf`](report/heat-solver-report.pdf) (6 pages).
+
 A small study of how a simple scientific code behaves on real hardware: the 2D heat equation
 solved serially, with OpenMP on the CPU and with CUDA on the GPU, in single and double precision,
 together with a benchmarking tool that runs every experiment and produces the plots below.
@@ -23,6 +25,7 @@ $r = \alpha\,\Delta t / h^2$ times the 5-point discrete Laplacian. It is stable 
 | `bench/heatbench.py` | Benchmarking tool: sweeps configurations, repeats runs, writes CSVs, plots and `results/report.md` |
 | `scripts/` | Build and run helpers for Linux / WSL |
 | `results/`, `figures/` | Data and plots from the runs described below |
+| `report/` | Technical report (HTML source and PDF) |
 
 ## Build and run
 
