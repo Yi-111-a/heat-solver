@@ -37,6 +37,8 @@ struct Config {
     std::string precision = "double";
     std::string backend = "serial";
     int threads = 0;               // 0 = OpenMP default
+    std::string schedule = "static";  // how rows are shared out: static or dynamic
+    bool persistent = false;       // one thread team for all time steps instead of one per step
 };
 
 struct Result {
@@ -48,7 +50,8 @@ struct Result {
 [[noreturn]] void usage() {
     std::fprintf(stderr,
                  "usage: heat [--n N] [--steps S | --t-end T] [--r R]\n"
-                 "            [--precision float|double] [--backend serial|omp|cuda] [--threads P]\n");
+                 "            [--precision float|double] [--backend serial|omp|cuda] [--threads P]\n"
+                 "            [--schedule static|dynamic] [--persistent]\n");
     std::exit(1);
 }
 
@@ -66,12 +69,15 @@ Config parse_args(int argc, char** argv) {
         else if (!std::strcmp(argv[i], "--precision")) c.precision = next();
         else if (!std::strcmp(argv[i], "--backend")) c.backend = next();
         else if (!std::strcmp(argv[i], "--threads")) c.threads = std::atoi(next());
+        else if (!std::strcmp(argv[i], "--schedule")) c.schedule = next();
+        else if (!std::strcmp(argv[i], "--persistent")) c.persistent = true;
         else usage();
     }
     if (c.n < 1 || c.r <= 0.0 || c.r > 0.25) usage();
     if ((c.steps < 0) == (c.t_end < 0.0)) usage();  // exactly one of --steps / --t-end
     if (c.precision != "float" && c.precision != "double") usage();
     if (c.backend != "serial" && c.backend != "omp" && c.backend != "cuda") usage();
+    if (c.schedule != "static" && c.schedule != "dynamic") usage();
 #ifndef HEAT_WITH_CUDA
     if (c.backend == "cuda") {
         std::fprintf(stderr, "this build has no CUDA back end\n");
@@ -96,16 +102,45 @@ void step_serial(const T* u, T* v, int n, T r) {
 
 // Same update, but rows are shared out between threads. Every point depends only on the
 // previous time level, so rows can be computed in any order without data races.
+// The schedule (static or dynamic) is chosen at run time with omp_set_schedule.
 template <typename T>
 void step_omp(const T* u, T* v, int n, T r) {
     const int w = n + 2;
-#pragma omp parallel for schedule(static)
+#pragma omp parallel for schedule(runtime)
     for (int i = 1; i <= n; ++i) {
         for (int j = 1; j <= n; ++j) {
             const int k = i * w + j;
             v[k] = u[k] + r * (u[k - w] + u[k + w] + u[k - 1] + u[k + 1] - T(4) * u[k]);
         }
     }
+}
+
+// All time steps inside one parallel region: the threads are started once, and each step
+// only costs a barrier (at the end of the `omp for`) instead of starting a new team.
+// Returns the buffer that holds the final time level.
+template <typename T>
+T* run_omp_persistent(T* u, T* v, int n, T r, long steps) {
+    const int w = n + 2;
+#pragma omp parallel
+    {
+        // Private copies of the pointers: every thread swaps its own, so they stay in agreement
+        // without a shared variable being written by all threads at once.
+        const T* src = u;
+        T* dst = v;
+        for (long s = 0; s < steps; ++s) {
+#pragma omp for schedule(runtime)
+            for (int i = 1; i <= n; ++i) {
+                for (int j = 1; j <= n; ++j) {
+                    const int k = i * w + j;
+                    dst[k] = src[k] + r * (src[k - w] + src[k + w] + src[k - 1] + src[k + 1] - T(4) * src[k]);
+                }
+            }  // implicit barrier: nobody starts the next step until this one is finished
+            T* next_dst = const_cast<T*>(src);
+            src = dst;
+            dst = next_dst;
+        }
+    }
+    return steps % 2 == 0 ? u : v;
 }
 
 template <typename T>
@@ -140,6 +175,9 @@ Result run(const Config& c) {
     if (c.backend == "omp") {
         if (c.threads > 0) omp_set_num_threads(c.threads);
         threads = omp_get_max_threads();
+        // Dynamic: threads take 16 rows at a time as they become free, so fast cores do more.
+        if (c.schedule == "dynamic") omp_set_schedule(omp_sched_dynamic, 16);
+        else omp_set_schedule(omp_sched_static, 0);
     }
 #endif
 
@@ -150,7 +188,12 @@ Result run(const Config& c) {
         seconds = run_cuda(u, n, steps, r);
     } else
 #endif
-    {
+    if (c.backend == "omp" && c.persistent) {
+        const auto start = std::chrono::steady_clock::now();
+        T* final = run_omp_persistent(u.data(), v.data(), n, r, steps);
+        seconds = std::chrono::duration<double>(std::chrono::steady_clock::now() - start).count();
+        if (final != u.data()) std::swap(u, v);
+    } else {
         const auto start = std::chrono::steady_clock::now();
         for (long s = 0; s < steps; ++s) {
             if (c.backend == "omp") step_omp(u.data(), v.data(), n, r);
@@ -198,10 +241,12 @@ int main(int argc, char** argv) {
     const double gbs = res.seconds > 0.0 ? bytes / res.seconds / 1e9 : 0.0;
 
     std::printf(
-        "{\"backend\":\"%s\",\"precision\":\"%s\",\"n\":%d,\"threads\":%d,\"steps\":%ld,"
+        "{\"backend\":\"%s\",\"precision\":\"%s\",\"n\":%d,\"threads\":%d,"
+        "\"schedule\":\"%s\",\"persistent\":%s,\"steps\":%ld,"
         "\"dt\":%.6e,\"t\":%.6e,\"seconds\":%.6e,\"mlups\":%.3f,\"gbs\":%.3f,"
         "\"max_err\":%.6e,\"rms_err\":%.6e}\n",
-        c.backend.c_str(), c.precision.c_str(), c.n, res.threads, res.steps, res.dt, res.t,
-        res.seconds, mlups, gbs, res.max_err, res.rms_err);
+        c.backend.c_str(), c.precision.c_str(), c.n, res.threads, c.schedule.c_str(),
+        c.persistent ? "true" : "false", res.steps, res.dt, res.t, res.seconds, mlups, gbs,
+        res.max_err, res.rms_err);
     return 0;
 }

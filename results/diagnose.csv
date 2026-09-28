@@ -1,0 +1,41 @@
+backend,precision,n,threads,schedule,persistent,steps,dt,t,seconds,mlups,gbs,max_err,rms_err,test,variant,machine
+omp,double,4096,1,static,False,30,1.191511e-08,3.574533e-07,0.4356118,1155.424,18.487,4.842453e-13,2.420611e-13,bandwidth,double,13th Gen Intel(R) Core(TM) i5-13500HX
+omp,float,4096,1,static,False,30,1.191511e-08,3.574533e-07,0.2130844,2362.052,18.896,1.127368e-06,2.899663e-07,bandwidth,float,13th Gen Intel(R) Core(TM) i5-13500HX
+omp,double,4096,1,dynamic,False,30,1.191511e-08,3.574533e-07,0.4302712,1169.766,18.716,4.842453e-13,2.420611e-13,schedule,dynamic,13th Gen Intel(R) Core(TM) i5-13500HX
+omp,double,256,1,static,False,5000,3.028055e-06,0.01514027,0.1046599,3130.903,50.094,3.864089e-06,1.939664e-06,overhead,new team every step,13th Gen Intel(R) Core(TM) i5-13500HX
+omp,double,256,1,static,True,5000,3.028055e-06,0.01514027,0.0920611,3559.375,56.95,3.864089e-06,1.939664e-06,overhead,one team for all steps,13th Gen Intel(R) Core(TM) i5-13500HX
+omp,double,4096,2,static,False,30,1.191511e-08,3.574533e-07,0.3124417,1610.913,25.775,4.842453e-13,2.420611e-13,bandwidth,double,13th Gen Intel(R) Core(TM) i5-13500HX
+omp,float,4096,2,static,False,30,1.191511e-08,3.574533e-07,0.154027,3267.716,26.142,1.127368e-06,2.899663e-07,bandwidth,float,13th Gen Intel(R) Core(TM) i5-13500HX
+omp,double,4096,2,dynamic,False,30,1.191511e-08,3.574533e-07,0.3117011,1614.741,25.836,4.842453e-13,2.420611e-13,schedule,dynamic,13th Gen Intel(R) Core(TM) i5-13500HX
+omp,double,256,2,static,False,5000,3.028055e-06,0.01514027,0.1596874,2052.009,32.832,3.864089e-06,1.939664e-06,overhead,new team every step,13th Gen Intel(R) Core(TM) i5-13500HX
+omp,double,256,2,static,True,5000,3.028055e-06,0.01514027,0.1207404,2713.922,43.423,3.864089e-06,1.939664e-06,overhead,one team for all steps,13th Gen Intel(R) Core(TM) i5-13500HX
+omp,double,4096,4,static,False,30,1.191511e-08,3.574533e-07,0.2204193,2283.45,36.535,4.842453e-13,2.420611e-13,bandwidth,double,13th Gen Intel(R) Core(TM) i5-13500HX
+omp,float,4096,4,static,False,30,1.191511e-08,3.574533e-07,0.112294,4482.132,35.857,1.127368e-06,2.899663e-07,bandwidth,float,13th Gen Intel(R) Core(TM) i5-13500HX
+omp,double,4096,4,dynamic,False,30,1.191511e-08,3.574533e-07,0.2224023,2263.09,36.209,4.842453e-13,2.420611e-13,schedule,dynamic,13th Gen Intel(R) Core(TM) i5-13500HX
+omp,double,256,4,static,False,5000,3.028055e-06,0.01514027,0.1721955,1902.953,30.447,3.864089e-06,1.939664e-06,overhead,new team every step,13th Gen Intel(R) Core(TM) i5-13500HX
+omp,double,256,4,static,True,5000,3.028055e-06,0.01514027,0.1170947,2798.419,44.775,3.864089e-06,1.939664e-06,overhead,one team for all steps,13th Gen Intel(R) Core(TM) i5-13500HX
+omp,double,4096,6,static,False,30,1.191511e-08,3.574533e-07,0.2021216,2490.167,39.843,4.842453e-13,2.420611e-13,bandwidth,double,13th Gen Intel(R) Core(TM) i5-13500HX
+omp,float,4096,6,static,False,30,1.191511e-08,3.574533e-07,0.106543,4724.069,37.793,1.127368e-06,2.899663e-07,bandwidth,float,13th Gen Intel(R) Core(TM) i5-13500HX
+omp,double,4096,6,dynamic,False,30,1.191511e-08,3.574533e-07,0.2062947,2439.794,39.037,4.842453e-13,2.420611e-13,schedule,dynamic,13th Gen Intel(R) Core(TM) i5-13500HX
+omp,double,256,6,static,False,5000,3.028055e-06,0.01514027,0.204232,1604.45,25.671,3.864089e-06,1.939664e-06,overhead,new team every step,13th Gen Intel(R) Core(TM) i5-13500HX
+omp,double,256,6,static,True,5000,3.028055e-06,0.01514027,0.159412,2055.554,32.889,3.864089e-06,1.939664e-06,overhead,one team for all steps,13th Gen Intel(R) Core(TM) i5-13500HX
+omp,double,4096,8,static,False,30,1.191511e-08,3.574533e-07,0.2197411,2290.498,36.648,4.842453e-13,2.420611e-13,bandwidth,double,13th Gen Intel(R) Core(TM) i5-13500HX
+omp,float,4096,8,static,False,30,1.191511e-08,3.574533e-07,0.1146169,4391.294,35.13,1.127368e-06,2.899663e-07,bandwidth,float,13th Gen Intel(R) Core(TM) i5-13500HX
+omp,double,4096,8,dynamic,False,30,1.191511e-08,3.574533e-07,0.2128614,2364.527,37.832,4.842453e-13,2.420611e-13,schedule,dynamic,13th Gen Intel(R) Core(TM) i5-13500HX
+omp,double,256,8,static,False,5000,3.028055e-06,0.01514027,0.2387236,1372.633,21.962,3.864089e-06,1.939664e-06,overhead,new team every step,13th Gen Intel(R) Core(TM) i5-13500HX
+omp,double,256,8,static,True,5000,3.028055e-06,0.01514027,0.2590813,1264.777,20.236,3.864089e-06,1.939664e-06,overhead,one team for all steps,13th Gen Intel(R) Core(TM) i5-13500HX
+omp,double,4096,12,static,False,30,1.191511e-08,3.574533e-07,0.2208263,2279.242,36.468,4.842453e-13,2.420611e-13,bandwidth,double,13th Gen Intel(R) Core(TM) i5-13500HX
+omp,float,4096,12,static,False,30,1.191511e-08,3.574533e-07,0.1123743,4478.929,35.831,1.127368e-06,2.899663e-07,bandwidth,float,13th Gen Intel(R) Core(TM) i5-13500HX
+omp,double,4096,12,dynamic,False,30,1.191511e-08,3.574533e-07,0.2215494,2271.802,36.349,4.842453e-13,2.420611e-13,schedule,dynamic,13th Gen Intel(R) Core(TM) i5-13500HX
+omp,double,256,12,static,False,5000,3.028055e-06,0.01514027,0.290526,1127.885,18.046,3.864089e-06,1.939664e-06,overhead,new team every step,13th Gen Intel(R) Core(TM) i5-13500HX
+omp,double,256,12,static,True,5000,3.028055e-06,0.01514027,0.3239735,1011.441,16.183,3.864089e-06,1.939664e-06,overhead,one team for all steps,13th Gen Intel(R) Core(TM) i5-13500HX
+omp,double,4096,16,static,False,30,1.191511e-08,3.574533e-07,0.2229905,2257.121,36.114,4.842453e-13,2.420611e-13,bandwidth,double,13th Gen Intel(R) Core(TM) i5-13500HX
+omp,float,4096,16,static,False,30,1.191511e-08,3.574533e-07,0.1145078,4395.478,35.164,1.127368e-06,2.899663e-07,bandwidth,float,13th Gen Intel(R) Core(TM) i5-13500HX
+omp,double,4096,16,dynamic,False,30,1.191511e-08,3.574533e-07,0.2260277,2226.791,35.629,4.842453e-13,2.420611e-13,schedule,dynamic,13th Gen Intel(R) Core(TM) i5-13500HX
+omp,double,256,16,static,False,5000,3.028055e-06,0.01514027,0.3448641,950.171,15.203,3.864089e-06,1.939664e-06,overhead,new team every step,13th Gen Intel(R) Core(TM) i5-13500HX
+omp,double,256,16,static,True,5000,3.028055e-06,0.01514027,0.4998656,655.536,10.489,3.864089e-06,1.939664e-06,overhead,one team for all steps,13th Gen Intel(R) Core(TM) i5-13500HX
+omp,double,4096,20,static,False,30,1.191511e-08,3.574533e-07,0.2264694,2222.448,35.559,4.842453e-13,2.420611e-13,bandwidth,double,13th Gen Intel(R) Core(TM) i5-13500HX
+omp,float,4096,20,static,False,30,1.191511e-08,3.574533e-07,0.1165923,4316.893,34.535,1.127368e-06,2.899663e-07,bandwidth,float,13th Gen Intel(R) Core(TM) i5-13500HX
+omp,double,4096,20,dynamic,False,30,1.191511e-08,3.574533e-07,0.2309011,2179.792,34.877,4.842453e-13,2.420611e-13,schedule,dynamic,13th Gen Intel(R) Core(TM) i5-13500HX
+omp,double,256,20,static,False,5000,3.028055e-06,0.01514027,0.4205337,779.2,12.467,3.864089e-06,1.939664e-06,overhead,new team every step,13th Gen Intel(R) Core(TM) i5-13500HX
+omp,double,256,20,static,True,5000,3.028055e-06,0.01514027,0.5445227,601.775,9.628,3.864089e-06,1.939664e-06,overhead,one team for all steps,13th Gen Intel(R) Core(TM) i5-13500HX

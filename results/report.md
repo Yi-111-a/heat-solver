@@ -15,16 +15,29 @@ CPU: 13th Gen Intel(R) Core(TM) i5-13500HX
 
 | n | precision | best speedup | at threads | speedup at max threads |
 |---|---|---|---|---|
-| 512 | double | 1.59 | 4 | 0.94 |
-| 512 | float | 1.16 | 4 | 0.58 |
-| 2048 | double | 2.31 | 12 | 2.17 |
-| 2048 | float | 2.84 | 8 | 2.63 |
+| 512 | double | 1.59 | 4 | 0.91 |
+| 512 | float | 1.10 | 4 | 0.55 |
+| 2048 | double | 2.24 | 6 | 2.02 |
+| 2048 | float | 2.84 | 20 | 2.84 |
 
 ![scaling](../figures/scaling.png)
 
 ## CPU throughput vs problem size
 
 ![size](../figures/size.png)
+
+## Why OpenMP does not scale
+
+| test | variant | best |
+|---|---|---|
+| bandwidth (large grid) | double | 39.8 GB/s |
+| bandwidth (large grid) | float | 37.8 GB/s |
+| schedule (large grid) | static | 2490 MLUPS |
+| schedule (large grid) | dynamic | 2440 MLUPS |
+| overhead (small grid) | new team every step | 3131 MLUPS |
+| overhead (small grid) | one team for all steps | 3559 MLUPS |
+
+![diagnose](../figures/diagnose.png)
 
 ## GPU (NVIDIA GeForce RTX 4060 Laptop GPU)
 

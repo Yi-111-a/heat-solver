@@ -32,7 +32,7 @@ CPU only (any C++17 compiler with OpenMP, e.g. GCC on Windows or Linux):
 cmake -S . -B build -DCMAKE_BUILD_TYPE=Release
 cmake --build build
 ./build/heat --n 1024 --steps 200 --backend omp --precision float
-python bench/heatbench.py cpu          # convergence, OpenMP scaling, CPU throughput
+python bench/heatbench.py cpu --dram-gbs 76.8   # convergence, scaling, throughput, diagnose
 ```
 
 With the GPU back end (Linux or WSL with the CUDA toolkit; CMake picks it up automatically):
@@ -67,14 +67,18 @@ The GPU gives exactly the same errors as the CPU in both precisions, which check
 ![scaling](figures/scaling.png)
 
 On a large grid the OpenMP version reaches about 2 to 3 times the serial speed; on a small grid extra
-threads make it slower. Likely causes, to be tested one at a time:
+threads make it slower. Three explanations were tested one at a time (`heatbench.py diagnose`):
 
-1. *Memory bandwidth.* Each update does only a handful of arithmetic operations per value
-   loaded, so on large grids the cores wait for memory.
-2. *Hybrid cores.* The static schedule gives every thread the same number of rows, but the
-   efficiency cores are slower, so the performance cores finish first and wait.
-3. *Per-step overhead.* On small grids a time step takes microseconds, comparable to the cost of
-   starting and synchronising the threads.
+![diagnose](figures/diagnose.png)
+
+| Hypothesis | Test | Result |
+|---|---|---|
+| **Memory bandwidth** limits large grids | Bandwidth vs threads on a 4096² grid, float and double | **Confirmed.** Bandwidth stops rising at about 40 GB/s by 6 threads and is the same in both precisions. Counting the extra read the CPU makes before each write (write-allocate), real traffic is about 55 to 60 GB/s, 70 to 80 % of the 76.8 GB/s peak of the dual-channel DDR5-4800 memory. |
+| **Hybrid cores** (performance cores wait for efficiency cores) | Dynamic schedule, 16 rows per chunk, so faster cores take more rows | **Rejected.** Dynamic and static are within noise of each other. When every core is waiting for memory, core speed does not matter. |
+| **Per-step overhead** dominates small grids | Keep one thread team for all time steps, so each step costs a barrier instead of a new team | **Partly confirmed.** Up to 6 threads this is 30 to 45 % faster, but beyond that the barrier itself grows with the number of threads, and on a 256² grid no parallel version beats one thread. |
+
+The practical conclusion: for this kernel on this machine, use about 6 threads on large grids and one
+thread on small ones; more cores cannot help a computation that is waiting for memory.
 
 ### 3. GPU: the speedup is the bandwidth ratio, and double precision is not 64 times slower
 
@@ -91,8 +95,7 @@ threads make it slower. Likely causes, to be tested one at a time:
   of effective traffic for single precision), because the data never leaves the cache.
 - **Small grids** are limited by the fixed cost of launching a kernel for every time step.
 
-## Next steps
+## Possible extensions
 
-- Test the three CPU explanations one by one (dynamic scheduling, pinning threads to the
-  performance cores, one parallel region for all time steps).
-- Reduce kernel-launch overhead for small grids (several time steps per launch).
+- Temporal blocking (several time steps per pass over memory) to get past the bandwidth limit.
+- Several time steps per kernel launch to reduce launch overhead on small GPU grids.

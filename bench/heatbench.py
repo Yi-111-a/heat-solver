@@ -4,12 +4,14 @@ Usage:
     python bench/heatbench.py convergence   # accuracy: error vs grid spacing, float vs double
     python bench/heatbench.py scaling       # OpenMP speedup vs number of threads
     python bench/heatbench.py size          # CPU throughput vs grid size (cache vs memory)
+    python bench/heatbench.py diagnose      # tests of why OpenMP scaling is poor
     python bench/heatbench.py gpu           # CUDA: correctness vs CPU, throughput vs grid size
-    python bench/heatbench.py cpu           # convergence + scaling + size
+    python bench/heatbench.py cpu           # convergence + scaling + size + diagnose
     python bench/heatbench.py report        # Markdown report from whatever results exist
 
 Options:
     --build DIR   directory containing the solver binary (default: build)
+    --dram-gbs X  theoretical memory bandwidth, for the reference line in `diagnose`
 
 Each experiment writes results/<name>.csv and figures/<name>.png, so CPU experiments and GPU
 experiments can be run on different systems (e.g. Windows for the CPU, WSL or Colab for the GPU)
@@ -77,7 +79,11 @@ def run_solver(solver, repeats=1, **options):
     """Run the solver `repeats` times and keep the fastest run (least disturbed by the OS)."""
     args = [str(solver)]
     for key, value in options.items():
-        args += ["--" + key.replace("_", "-"), str(value)]
+        flag = "--" + key.replace("_", "-")
+        if value is True:
+            args.append(flag)  # on/off switch such as --persistent
+        elif value is not False and value is not None:
+            args += [flag, str(value)]
     runs = []
     for _ in range(repeats):
         out = subprocess.run(args, capture_output=True, text=True, check=True).stdout
@@ -226,6 +232,78 @@ def size(solver, sizes=(128, 256, 512, 1024, 2048, 4096), repeats=3):
     save_figure(fig, "size")
 
 
+DIAG_THREADS = (1, 2, 4, 6, 8, 12, 16, 20)
+
+
+def diagnose(solver, dram_gbs=None, repeats=3):
+    """Test the three suspected reasons for poor OpenMP scaling, one experiment each.
+
+    1. Memory bandwidth: on a large grid, does bandwidth stop rising as threads are added,
+       and is it the same in float and double?
+    2. Hybrid cores: on the same grid, does a dynamic schedule (fast cores take more rows) help?
+    3. Per-step overhead: on a small grid, does keeping one thread team for all steps help?
+    """
+    thread_counts = [p for p in DIAG_THREADS if p <= (os.cpu_count() or 1)]
+    rows = []
+
+    def record(test, label, **options):
+        r = run_solver(solver, repeats, **options)
+        r["test"], r["variant"] = test, label
+        rows.append(r)
+        print(f"  {test:9s} {label:22s} threads={r['threads']:2d}  "
+              f"{r['mlups']:8.1f} MLUPS  {r['gbs']:6.1f} GB/s")
+
+    big, small = 4096, 256
+    for p in thread_counts:
+        for precision in PRECISIONS:
+            record("bandwidth", precision, n=big, steps=30, precision=precision, backend="omp", threads=p)
+        record("schedule", "dynamic", n=big, steps=30, precision="double", backend="omp",
+               threads=p, schedule="dynamic")
+        record("overhead", "new team every step", n=small, steps=5000, precision="double",
+               backend="omp", threads=p)
+        record("overhead", "one team for all steps", n=small, steps=5000, precision="double",
+               backend="omp", threads=p, persistent=True)
+    serial_small = run_solver(solver, repeats, n=small, steps=5000, precision="double", backend="serial")
+    save_csv("diagnose", rows, cpu_name())
+
+    fig, axes = plt.subplots(1, 3, figsize=(15, 4.5))
+    ax = axes[0]
+    for precision in PRECISIONS:
+        sel = [r for r in rows if r["test"] == "bandwidth" and r["variant"] == precision]
+        ax.plot([r["threads"] for r in sel], [r["gbs"] for r in sel], marker=MARKERS[precision], label=precision)
+    if dram_gbs:
+        ax.axhline(dram_gbs, color="k", ls=":", label=f"DRAM peak {dram_gbs:g} GB/s")
+    ax.set_title(f"1. Bandwidth, n={big}")
+    ax.set_xlabel("threads")
+    ax.set_ylabel("GB/s (2 accesses per update)")
+    ax.set_ylim(bottom=0)
+    ax.legend(fontsize=8)
+
+    ax = axes[1]
+    static = [r for r in rows if r["test"] == "bandwidth" and r["variant"] == "double"]
+    dynamic = [r for r in rows if r["test"] == "schedule"]
+    ax.plot([r["threads"] for r in static], [r["mlups"] for r in static], marker="o", label="static")
+    ax.plot([r["threads"] for r in dynamic], [r["mlups"] for r in dynamic], marker="^", label="dynamic")
+    ax.set_title(f"2. Static vs dynamic schedule, n={big}, double")
+    ax.set_xlabel("threads")
+    ax.set_ylabel("MLUPS")
+    ax.set_ylim(bottom=0)
+    ax.legend(fontsize=8)
+
+    ax = axes[2]
+    for label, marker in (("new team every step", "o"), ("one team for all steps", "^")):
+        sel = [r for r in rows if r["test"] == "overhead" and r["variant"] == label]
+        ax.plot([r["threads"] for r in sel], [r["mlups"] for r in sel], marker=marker, label=label)
+    ax.axhline(serial_small["mlups"], color="k", ls=":", label="serial")
+    ax.set_title(f"3. Per-step overhead, n={small}, double")
+    ax.set_xlabel("threads")
+    ax.set_ylabel("MLUPS")
+    ax.set_ylim(bottom=0)
+    ax.legend(fontsize=8)
+    fig.suptitle(f"Why OpenMP does not scale: three tests ({cpu_name()})", fontsize=11)
+    save_figure(fig, "diagnose")
+
+
 def gpu(solver, sizes=(128, 256, 512, 1024, 2048, 4096, 8192), repeats=3):
     """CUDA version: first check it agrees with the CPU, then measure throughput vs grid size."""
     if not has_cuda(solver):
@@ -296,6 +374,19 @@ def write_report():
         lines += ["", "![scaling](../figures/scaling.png)", ""]
     if load_csv("size"):
         lines += ["## CPU throughput vs problem size", "", "![size](../figures/size.png)", ""]
+    diag = load_csv("diagnose")
+    if diag:
+        def peak(test, variant, key):
+            return max(r[key] for r in diag if r["test"] == test and r["variant"] == variant)
+        lines += ["## Why OpenMP does not scale", "",
+                  "| test | variant | best |", "|---|---|---|",
+                  f"| bandwidth (large grid) | double | {peak('bandwidth', 'double', 'gbs'):.1f} GB/s |",
+                  f"| bandwidth (large grid) | float | {peak('bandwidth', 'float', 'gbs'):.1f} GB/s |",
+                  f"| schedule (large grid) | static | {peak('bandwidth', 'double', 'mlups'):.0f} MLUPS |",
+                  f"| schedule (large grid) | dynamic | {peak('schedule', 'dynamic', 'mlups'):.0f} MLUPS |",
+                  f"| overhead (small grid) | new team every step | {peak('overhead', 'new team every step', 'mlups'):.0f} MLUPS |",
+                  f"| overhead (small grid) | one team for all steps | {peak('overhead', 'one team for all steps', 'mlups'):.0f} MLUPS |",
+                  "", "![diagnose](../figures/diagnose.png)", ""]
     gpu_rows = load_csv("gpu")
     if gpu_rows:
         lines += [f"## GPU ({gpu_rows[0]['machine']})", "",
@@ -314,8 +405,10 @@ def write_report():
 
 def main():
     parser = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
-    parser.add_argument("experiment", choices=["convergence", "scaling", "size", "gpu", "cpu", "report"])
+    parser.add_argument("experiment", choices=["convergence", "scaling", "size", "diagnose", "gpu", "cpu", "report"])
     parser.add_argument("--build", default="build", help="directory containing the solver binary")
+    parser.add_argument("--dram-gbs", type=float, default=None,
+                        help="theoretical memory bandwidth, drawn as a reference line in `diagnose`")
     args = parser.parse_args()
 
     if args.experiment != "report":
@@ -326,6 +419,8 @@ def main():
             scaling(solver)
         if args.experiment in ("size", "cpu"):
             size(solver)
+        if args.experiment in ("diagnose", "cpu"):
+            diagnose(solver, args.dram_gbs)
         if args.experiment == "gpu":
             gpu(solver)
     write_report()
